@@ -566,6 +566,7 @@ class FerretMetaForCausalLM(ABC):
         self, input_ids, position_ids, attention_mask, past_key_values, labels,
         images, image_sizes=None, region_masks=None
     ):
+        # 1. 检查和初始化输入
         if region_masks is not None:
             region_flag = True
         else:
@@ -580,8 +581,13 @@ class FerretMetaForCausalLM(ABC):
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             
+            # 2. 图像编码和投影
             concat_images = torch.cat([image for image in images], dim=0)
-            raw_image_features, image_features, region_feature_map = self.encode_images(concat_images, region_flag=region_flag, region_geo_sampler=region_geo_sampler)
+            raw_image_features, image_features, region_feature_map = self.encode_images(
+                concat_images, 
+                region_flag=region_flag, 
+                region_geo_sampler=region_geo_sampler
+            )
             split_sizes = [image.shape[0] for image in images]
             image_features = torch.split(image_features, split_sizes, dim=0)
 
@@ -595,6 +601,7 @@ class FerretMetaForCausalLM(ABC):
             mm_patch_merge_type = getattr(self.config, 'mm_patch_merge_type', 'flat')
             image_aspect_ratio = getattr(self.config, 'image_aspect_ratio', 'square_nocrop')
 
+            # 3. 图像特征合并
             if mm_patch_merge_type == 'flat':
                 image_features = [x.flatten(0, 1) for x in image_features]
                 # TODO: here we use the first feature map default for each batch (global feaure map) for referring
@@ -609,14 +616,17 @@ class FerretMetaForCausalLM(ABC):
                         image_feature = image_feature[1:]
                         height = width = self.get_vision_tower().num_patches_per_side
                         assert height * width == base_image_feature.shape[0]
+                        
                         if region_flag:
                             cur_region_feature_map = region_feature_maps[image_idx]  # (#patches, h*w, c)
                             cur_region_feature_map = cur_region_feature_map.view(cur_region_feature_map.shape[0], height, width, cur_region_feature_map.shape[-1])  # (#patches, h, w, c)
                             base_region_feature = cur_region_feature_map[0]
                             region_feature = cur_region_feature_map[1:]
                             # pdb.set_trace()
+                        
                         if image_aspect_ratio == 'anyres':
-                            num_patch_width, num_patch_height = get_anyres_image_grid_shape(image_sizes[image_idx], self.config.image_grid_pinpoints, self.get_vision_tower().config.image_size)
+                            num_patch_width, num_patch_height = get_anyres_image_grid_shape(
+                                image_sizes[image_idx], self.config.image_grid_pinpoints, self.get_vision_tower().config.image_size)
                             image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
                             if region_flag:
                                 region_feature = region_feature.view(num_patch_height, num_patch_width, height, width, -1)
@@ -635,6 +645,7 @@ class FerretMetaForCausalLM(ABC):
                         else:
                             image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
                             image_feature = image_feature.flatten(0, 3)
+                        
                         image_feature = torch.cat((base_image_feature, image_feature), dim=0)
                         if region_flag:
                             region_feature = region_feature.permute(0, 2, 1, 3, 4).contiguous()   # (patch_h, patch_w, h, w, c) -> (patch_h, h, patch_w, w, c)
@@ -671,6 +682,7 @@ class FerretMetaForCausalLM(ABC):
         else:
             raw_image_features, image_features, region_feature_map = self.encode_images(images, region_flag=region_flag, region_geo_sampler=region_geo_sampler)
         
+        # 4. 区域特征提取
         if region_flag:
             assert len(region_masks) == len(input_ids)
             for img_idx, (cur_input_id, cur_region_mask) in enumerate(zip(input_ids, region_masks)):
@@ -688,34 +700,58 @@ class FerretMetaForCausalLM(ABC):
 
             if region_geo_sampler:
                 if type(image_features) is list:
-                    region_features = self.get_model().region_geo_sampler(region_feature_map, region_masks, 
-                                                                        original_dtype=raw_image_features.dtype,
-                                                                        return_dtype=image_features[0].dtype)
-                    dump_region_features = self.get_model().region_geo_sampler(region_feature_map, dump_region_masks, 
-                                                                        original_dtype=raw_image_features.dtype,
-                                                                        return_dtype=image_features[0].dtype)
+                    region_features = self.get_model().region_geo_sampler(
+                        region_feature_map, 
+                        region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features[0].dtype
+                    )
+                    dump_region_features = self.get_model().region_geo_sampler(
+                        region_feature_map, 
+                        dump_region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features[0].dtype
+                    )
                 else:
-                    region_features = self.get_model().region_geo_sampler(region_feature_map, region_masks, 
-                                                                        original_dtype=raw_image_features.dtype,
-                                                                        return_dtype=image_features.dtype)
-                    dump_region_features = self.get_model().region_geo_sampler(region_feature_map, dump_region_masks, 
-                                                                        original_dtype=raw_image_features.dtype,
-                                                                        return_dtype=image_features.dtype)
+                    region_features = self.get_model().region_geo_sampler(
+                        region_feature_map, 
+                        region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features.dtype
+                    )
+                    dump_region_features = self.get_model().region_geo_sampler(
+                        region_feature_map, 
+                        dump_region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features.dtype
+                    )
             else:
                 if type(image_features) is list:
-                    region_features = self.extract_region_feature(region_feature_map, region_masks, 
-                                                                original_dtype=raw_image_features.dtype,
-                                                                return_dtype=image_features[0].dtype)
-                    dump_region_features = self.extract_region_feature(region_feature_map, dump_region_masks, 
-                                                                original_dtype=raw_image_features.dtype,
-                                                                return_dtype=image_features[0].dtype)
+                    region_features = self.extract_region_feature(
+                        region_feature_map, 
+                        region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features[0].dtype
+                    )
+                    dump_region_features = self.extract_region_feature(
+                        region_feature_map, 
+                        dump_region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features[0].dtype
+                    )
                 else:
-                    region_features = self.extract_region_feature(region_feature_map, region_masks, 
-                                                              original_dtype=raw_image_features.dtype,
-                                                              return_dtype=image_features.dtype)
-                    dump_region_features = self.extract_region_feature(region_feature_map, dump_region_masks, 
-                                                                original_dtype=raw_image_features.dtype,
-                                                                return_dtype=image_features.dtype)
+                    region_features = self.extract_region_feature(
+                        region_feature_map, 
+                        region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features.dtype
+                    )
+                    dump_region_features = self.extract_region_feature(
+                        region_feature_map, 
+                        dump_region_masks, 
+                        original_dtype=raw_image_features.dtype,
+                        return_dtype=image_features.dtype
+                    )
             # assert len(dump_region_features) == 1
             assert len([df for df in dump_region_features if df is not None]) == 1
             assert len(dump_region_features[0]) == 1
@@ -817,12 +853,14 @@ class FerretMetaForCausalLM(ABC):
             new_input_embeds.append(cur_new_input_embeds)
             new_labels.append(cur_new_labels)
 
+        # 5. 填充和截断序列
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, 'tokenizer_model_max_length', None)
         if tokenizer_model_max_length is not None:
             new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
             new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
 
+        # 6. 填充输入序列
         # Combine them
         max_len = max(x.shape[0] for x in new_input_embeds)
         batch_size = len(new_input_embeds)
