@@ -13,9 +13,9 @@
 #    limitations under the License.
 
 
-from abc import ABC, abstractmethod
+import os
 import math
-
+from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
@@ -25,13 +25,17 @@ import torch.distributed as dist
 from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_projector.builder import build_vision_projector
 
-from ferretui.constants import (IGNORE_INDEX, IMAGE_TOKEN_INDEX,
-                                DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN,
-                                DEFAULT_IM_END_TOKEN, DEFAULT_REGION_FEA_TOKEN)
+from ferretui.constants import (
+    IGNORE_INDEX, 
+    IMAGE_TOKEN_INDEX,
+    DEFAULT_IMAGE_PATCH_TOKEN, 
+    DEFAULT_IM_START_TOKEN,
+    DEFAULT_IM_END_TOKEN, 
+    DEFAULT_REGION_FEA_TOKEN
+)
 
 from ferretui.mm_utils import get_anyres_image_grid_shape
 
-import os
 
 def rand_sample(x, max_len):
     if x.shape[0] <= max_len:
@@ -359,21 +363,23 @@ class FerretMetaModel:
 
         if hasattr(config, "region_geo_sampler"):
             if getattr(config, 'mm_patch_merge_type', 'flat').startswith('spatial'):
-                self.region_geo_sampler = GeoRegionSampler(input_dim=config.mm_hidden_size,
-                                                        output_dim=config.hidden_size,
-                                                        num_init_point=self.max_sample_point,
-                                                        num_sub_point=[128, 32],
-                                                        num_neighbor=[24, 24],
-                                                        pooler_mode=config.sampler_pooler_mode
-                                                        )
+                self.region_geo_sampler = GeoRegionSampler(
+                    input_dim=config.mm_hidden_size,
+                    output_dim=config.hidden_size,
+                    num_init_point=self.max_sample_point,
+                    num_sub_point=[128, 32],
+                    num_neighbor=[24, 24],
+                    pooler_mode=config.sampler_pooler_mode
+                )
             else:
-                self.region_geo_sampler = GeoRegionSampler(input_dim=config.mm_hidden_size,
-                                                        output_dim=config.hidden_size,
-                                                        num_init_point=self.max_sample_point,
-                                                        num_sub_point=[128, 32],
-                                                        num_neighbor=[24, 24],
-                                                        pooler_mode=config.sampler_pooler_mode
-                                                        )
+                self.region_geo_sampler = GeoRegionSampler(
+                    input_dim=config.mm_hidden_size,
+                    output_dim=config.hidden_size,
+                    num_init_point=self.max_sample_point,
+                    num_sub_point=[128, 32],
+                    num_neighbor=[24, 24],
+                    pooler_mode=config.sampler_pooler_mode
+                )
 
     def get_vision_tower(self):
         vision_tower = getattr(self, 'vision_tower', None)
@@ -381,11 +387,14 @@ class FerretMetaModel:
             vision_tower = vision_tower[0]
         return vision_tower
 
-    def initialize_vision_modules(self, model_args, fsdp=None,
-                                  add_region_feature=False, 
-                                  region_geo_sampler=False, 
-                                  sampler_pooler_mode='mean',
-                                  ):
+    def initialize_vision_modules(
+        self, 
+        model_args, 
+        fsdp=None,
+        add_region_feature=False, 
+        region_geo_sampler=False, 
+        sampler_pooler_mode='mean',
+    ):
         vision_tower = model_args.vision_tower
         mm_vision_select_layer = model_args.mm_vision_select_layer
         mm_vision_select_feature = model_args.mm_vision_select_feature
@@ -440,21 +449,23 @@ class FerretMetaModel:
                         #                                         pooler_mode=sampler_pooler_mode
                         #                                         )
                         # === if feature is added ===
-                        self.region_geo_sampler = GeoRegionSampler(input_dim=self.config.mm_hidden_size,
-                                                                output_dim=self.config.hidden_size,
-                                                                num_init_point=self.max_sample_point,
-                                                                num_sub_point=[128, 32],
-                                                                num_neighbor=[24, 24],
-                                                                pooler_mode=sampler_pooler_mode
-                                                                )
+                        self.region_geo_sampler = GeoRegionSampler(
+                            input_dim=self.config.mm_hidden_size,
+                            output_dim=self.config.hidden_size,
+                            num_init_point=self.max_sample_point,
+                            num_sub_point=[128, 32],
+                            num_neighbor=[24, 24],
+                            pooler_mode=sampler_pooler_mode
+                        )
                     else:
-                        self.region_geo_sampler = GeoRegionSampler(input_dim=self.config.mm_hidden_size,
-                                                                output_dim=self.config.hidden_size,
-                                                                num_init_point=self.max_sample_point,
-                                                                num_sub_point=[128, 32],
-                                                                num_neighbor=[24, 24],
-                                                                pooler_mode=sampler_pooler_mode
-                                                                )
+                        self.region_geo_sampler = GeoRegionSampler(
+                            input_dim=self.config.mm_hidden_size,
+                            output_dim=self.config.hidden_size,
+                            num_init_point=self.max_sample_point,
+                            num_sub_point=[128, 32],
+                            num_neighbor=[24, 24],
+                            pooler_mode=sampler_pooler_mode
+                        )
             else:
                 self.config.region_fea_adapter = True
                 if not hasattr(self, 'region_fea_adapter'):
@@ -550,11 +561,12 @@ class FerretMetaForCausalLM(ABC):
                 # F.grid_sample doesn't support BF16. Need to tranform into float32 then transform back.
                 dup_region_feature_map_i_ori_type = dup_region_feature_map_i.to(original_dtype)
                 # pdb.set_trace()
-                region_feature_i = point_sample(dup_region_feature_map_i_ori_type, 
-                                                non_zero_pos.flip(dims=(2,)).type(original_dtype), 
-                                                return_dtype, 
-                                                align_corners=True
-                                                )
+                region_feature_i = point_sample(
+                    dup_region_feature_map_i_ori_type, 
+                    non_zero_pos.flip(dims=(2,)).type(original_dtype), 
+                    return_dtype, 
+                    align_corners=True
+                )
                 region_feature_i = region_feature_i.to(dup_region_feature_map_i.dtype)
                 # [num_mask, C]
                 region_feature_i = torch.stack([x[m].mean(dim=0) for x, m in zip(region_feature_i.transpose(1,2), non_zero_pos_mask)]).nan_to_num()
@@ -563,33 +575,43 @@ class FerretMetaForCausalLM(ABC):
         return all_region_features
 
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, position_ids, attention_mask, past_key_values, labels,
-        images, image_sizes=None, region_masks=None
+        self, 
+        input_ids, 
+        position_ids, 
+        attention_mask, 
+        past_key_values, 
+        labels,
+        images, 
+        image_sizes=None, 
+        region_masks=None
     ):
+        """
+        region_flag = False
+        """
         # 1. 检查和初始化输入
         if region_masks is not None:
             region_flag = True
         else:
             region_flag = False
-        region_geo_sampler = region_flag and getattr(self.config, 'region_geo_sampler', False)
+        region_geo_sampler = region_flag and getattr(self.config, 'region_geo_sampler', False) # False
 
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
 
-        if type(images) is list or images.ndim == 5:
+        if type(images) is list or images.ndim == 5: # images: [1, 4, 3, 336, 336]
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             
             # 2. 图像编码和投影
-            concat_images = torch.cat([image for image in images], dim=0)
+            concat_images = torch.cat([image for image in images], dim=0) # [4, 3, 336, 336]
             raw_image_features, image_features, region_feature_map = self.encode_images(
                 concat_images, 
-                region_flag=region_flag, 
-                region_geo_sampler=region_geo_sampler
+                region_flag=region_flag, # False
+                region_geo_sampler=region_geo_sampler # False
             )
             split_sizes = [image.shape[0] for image in images]
-            image_features = torch.split(image_features, split_sizes, dim=0)
+            image_features = torch.split(image_features, split_sizes, dim=0) # [[4, 576, 4096], ...]
 
             if region_flag:
                 region_feature_maps = torch.split(region_feature_map, split_sizes, dim=0)  #  (#images, #patches, h*w, c)
@@ -611,10 +633,10 @@ class FerretMetaForCausalLM(ABC):
                 new_image_features = []
                 new_region_features = []
                 for image_idx, image_feature in enumerate(image_features):
-                    if image_feature.shape[0] > 1:
-                        base_image_feature = image_feature[0]
-                        image_feature = image_feature[1:]
-                        height = width = self.get_vision_tower().num_patches_per_side
+                    if image_feature.shape[0] > 1: # 【4, 576, dim】
+                        base_image_feature = image_feature[0] # [576, dim]
+                        image_feature = image_feature[1:] # [3, 576, dim]
+                        height = width = self.get_vision_tower().num_patches_per_side # 24
                         assert height * width == base_image_feature.shape[0]
                         
                         if region_flag:
@@ -627,7 +649,7 @@ class FerretMetaForCausalLM(ABC):
                         if image_aspect_ratio == 'anyres':
                             num_patch_width, num_patch_height = get_anyres_image_grid_shape(
                                 image_sizes[image_idx], self.config.image_grid_pinpoints, self.get_vision_tower().config.image_size)
-                            image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
+                            image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1) # [3, 576, dim] -> [3, 1, 24, 24, dim]
                             if region_flag:
                                 region_feature = region_feature.view(num_patch_height, num_patch_width, height, width, -1)
                         else:
@@ -643,10 +665,10 @@ class FerretMetaForCausalLM(ABC):
                             ), dim=-1)
                             image_feature = image_feature.flatten(1, 2).transpose(0, 1)
                         else:
-                            image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
+                            image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous() # 【3, 1, 24, 24, dim】 -> [3, 24, 1, 24, dim]
                             image_feature = image_feature.flatten(0, 3)
                         
-                        image_feature = torch.cat((base_image_feature, image_feature), dim=0)
+                        image_feature = torch.cat((base_image_feature, image_feature), dim=0) # [2304, dim]
                         if region_flag:
                             region_feature = region_feature.permute(0, 2, 1, 3, 4).contiguous()   # (patch_h, patch_w, h, w, c) -> (patch_h, h, patch_w, w, c)
                             region_feature = region_feature.flatten(0, 1).flatten(1, 2)   # (patch_h, h, patch_w, w, c) -> (all_h, all_w, c)
@@ -668,10 +690,12 @@ class FerretMetaForCausalLM(ABC):
                             ), dim=0)
                         if region_flag:
                             new_region_feature = region_feature_maps[image_idx][0]   # (h, w, c)
+                    
                     new_image_features.append(image_feature)
                     if region_flag:
                         new_region_features.append(new_region_feature)
                         # pdb.set_trace()
+                
                 image_features = new_image_features
                 if region_flag:
                     # region_feature_map = torch.stack(new_region_features, dim=0)  # (#images, h, w, c or 2c)
@@ -765,11 +789,11 @@ class FerretMetaForCausalLM(ABC):
         # it is a headache to deal with None all the time.
         # But it is not ideal, and if you have a better idea,
         # please open an issue / submit a PR, thanks.
-        _labels = labels
-        _position_ids = position_ids
-        _attention_mask = attention_mask
+        _labels = labels # None
+        _position_ids = position_ids # None
+        _attention_mask = attention_mask # None
         if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+            attention_mask = torch.ones_like(input_ids, dtype=torch.bool) # [batch_size, seq_len]
         else:
             attention_mask = attention_mask.bool()
         if position_ids is None:
@@ -779,14 +803,14 @@ class FerretMetaForCausalLM(ABC):
 
         # remove the padding using attention_mask -- FIXME
         _input_ids = input_ids
-        input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)]
+        input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)] # [seq_len, ...]
         labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)]
 
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
         for batch_idx, cur_input_ids in enumerate(input_ids):
-            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
+            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum() # TODO: image number
             if num_images == 0:
                 cur_image_features = image_features[cur_image_idx]
                 cur_input_embeds_1 = self.get_model().embed_tokens(cur_input_ids)
@@ -796,7 +820,7 @@ class FerretMetaForCausalLM(ABC):
                 cur_image_idx += 1
                 continue
 
-            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
+            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]] # [-1, 92, seq_len - 1]
             cur_input_id_with_im = []
             cur_input_ids_noim = []
             cur_labels = labels[batch_idx]
@@ -804,13 +828,13 @@ class FerretMetaForCausalLM(ABC):
             for i in range(len(image_token_indices) - 1):
                 cur_input_ids_noim.append(cur_input_ids[image_token_indices[i]+1:image_token_indices[i+1]])
                 cur_labels_noim.append(cur_labels[image_token_indices[i]+1:image_token_indices[i+1]])
-            split_sizes = [x.shape[0] for x in cur_labels_noim]
-            cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim))
-            cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
+            split_sizes = [x.shape[0] for x in cur_labels_noim] # [92, seq_len - 93]
+            cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim)) # [seq_len - 1, dim]
+            cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0) # [[92, dim], [seq_len - 93, dim]]
             cur_new_input_embeds = []
             cur_new_labels = []
             assert len(cur_input_ids_noim) == len(cur_input_embeds_no_im)
-            for i in range(num_images + 1):
+            for i in range(num_images + 1): # TODO: num_images
                 cur_input_id_with_im.append(cur_input_ids_noim[i])
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
@@ -824,7 +848,7 @@ class FerretMetaForCausalLM(ABC):
             cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
 
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)
-            cur_new_labels = torch.cat(cur_new_labels)
+            cur_new_labels = torch.cat(cur_new_labels) # [2404=576*4]
             cur_input_id_with_im = torch.cat(cur_input_id_with_im)
 
             assert len(cur_input_id_with_im) == len(cur_new_input_embeds)
@@ -855,7 +879,7 @@ class FerretMetaForCausalLM(ABC):
 
         # 5. 填充和截断序列
         # Truncate sequences to max length as image embeddings can make the sequence longer
-        tokenizer_model_max_length = getattr(self.config, 'tokenizer_model_max_length', None)
+        tokenizer_model_max_length = getattr(self.config, 'tokenizer_model_max_length', None) # dim
         if tokenizer_model_max_length is not None:
             new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
             new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
@@ -891,7 +915,7 @@ class FerretMetaForCausalLM(ABC):
                     attention_mask[i, :cur_len] = True
                     position_ids[i, :cur_len] = torch.arange(0, cur_len, dtype=position_ids.dtype, device=position_ids.device)
 
-        new_input_embeds = torch.stack(new_input_embeds_padded, dim=0)
+        new_input_embeds = torch.stack(new_input_embeds_padded, dim=0) # [batch_size, seq_len, dim]
 
         if _labels is None:
             new_labels = None

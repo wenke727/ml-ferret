@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from tqdm import tqdm
+from loguru import logger
 
 from ferretui.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, DEFAULT_REGION_FEA_TOKEN, VOCAB_IMAGE_W, VOCAB_IMAGE_H # type: ignore
 from ferretui.conversation import conv_templates, SeparatorStyle # type: ignore
@@ -41,7 +42,7 @@ class FerretUI:
             load_pretrained_model(model_path, args.model_base, model_name, use_safetensors=True)
         self.args = args
 
-    def generate(self, img, ann, image_size):
+    def generate(self, img, ann, image_size, verbose=False):
         args = self.args
         qs = ann["question"]
         cur_prompt = qs
@@ -60,9 +61,16 @@ class FerretUI:
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
+        if verbose: 
+            logger.debug(f"prompt: {prompt}")
 
         # 对输入进行编码
-        input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+        input_ids = tokenizer_image_token(
+            prompt, 
+            self.tokenizer, 
+            IMAGE_TOKEN_INDEX, 
+            return_tensors='pt'
+        ).unsqueeze(0).cuda()
 
         # 处理图像
         if self.model.config.image_aspect_ratio == "square_nocrop":
@@ -123,6 +131,9 @@ class FerretUI:
         # 解码输出
         outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
         outputs = outputs.strip()
+        if verbose:
+            logger.debug(f"outputs: {outputs}")
+
         return outputs, cur_prompt
 
 def eval_model(args):
@@ -166,14 +177,13 @@ def eval_model(args):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", type=str, default="facebook/opt-350m")
+    parser.add_argument("--model_path", type=str, default="./ckpt/llama8b-anyres")
     parser.add_argument("--vision_model_path", type=str, default=None)
     parser.add_argument("--model_base", type=str, default=None)
-    parser.add_argument("--image_path", type=str, default="")
-    parser.add_argument("--data_path", type=str, default="")
-    parser.add_argument("--answers_file", type=str, default="")
-    parser.add_argument("--conv_mode", type=str, default="ferret_gemma_instruct",
-                        help="[ferret_gemma_instruct,ferret_llama_3,ferret_vicuna_v1]")
+    parser.add_argument("--image_path", type=str, default="./playground/images")
+    parser.add_argument("--data_path", type=str, default="./playground/sample_data/eval_data_example_1_no_box_in.json")
+    parser.add_argument("--answers_file", type=str, default="./eval_output/data_no_box_in_eval.jsonl")
+    parser.add_argument("--conv_mode", type=str, default="ferret_llama_3", help="[ferret_gemma_instruct,ferret_llama_3,ferret_vicuna_v1]")
     parser.add_argument("--num_chunks", type=int, default=1)
     parser.add_argument("--chunk_idx", type=int, default=0)
     parser.add_argument("--image_w", type=int, default=336)  #  224
@@ -264,7 +274,8 @@ if __name__ == "__main__":
         "region_masks": None
     }
 
-    img = Image.open("appstore_reminders.png").convert("RGB")
+    fn = './playground/images/appstore_reminders.png'
+    img = Image.open(fn).convert("RGB")
     img_size = img.size
 
     model = FerretUI(args)
