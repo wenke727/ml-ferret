@@ -51,7 +51,7 @@ class FerretUI:
         if "<image>" in qs:
             qs = qs.split('\n')[1]
 
-        if self.model.config.mm_use_im_start_end:
+        if self.model.config.mm_use_im_start_end: # False
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
         else:
             qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
@@ -61,14 +61,15 @@ class FerretUI:
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
-        if verbose: 
+        # TODO multiturn conversation
+        if verbose:
             logger.debug(f"prompt: {prompt}")
 
         # 对输入进行编码
         input_ids = tokenizer_image_token(
-            prompt, 
-            self.tokenizer, 
-            IMAGE_TOKEN_INDEX, 
+            prompt,
+            self.tokenizer,
+            IMAGE_TOKEN_INDEX,
             return_tensors='pt'
         ).unsqueeze(0).cuda()
 

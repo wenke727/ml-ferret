@@ -23,7 +23,18 @@ from ferretui.model import *
 from ferretui.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
 
-def load_pretrained_model(model_path, model_base, model_name, use_safetensors=False, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, **kwargs):
+def load_pretrained_model(
+    model_path,
+    model_base,
+    model_name,
+    use_safetensors=False,
+    load_8bit=False,
+    load_4bit=False,
+    device_map="auto",
+    device="cuda",
+    use_flash_attn=False,
+    **kwargs
+):
     kwargs = {"device_map": device_map, **kwargs}
 
     if device != "cuda":
