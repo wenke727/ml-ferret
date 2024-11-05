@@ -73,14 +73,7 @@ class FerretLlamaForCausalLM(LlamaForCausalLM, FerretMetaForCausalLM):
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         if inputs_embeds is None:
-            (
-                input_ids,
-                position_ids,
-                attention_mask,
-                past_key_values,
-                inputs_embeds,
-                labels
-            ) = self.prepare_inputs_labels_for_multimodal(
+            (input_ids, position_ids, attention_mask, past_key_values, inputs_embeds, labels) = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 position_ids,
                 attention_mask,
@@ -120,14 +113,7 @@ class FerretLlamaForCausalLM(LlamaForCausalLM, FerretMetaForCausalLM):
             raise NotImplementedError("`inputs_embeds` is not supported")
 
         if images is not None:
-            (
-                inputs,
-                position_ids,
-                attention_mask,
-                _,
-                inputs_embeds,
-                _
-            ) = self.prepare_inputs_labels_for_multimodal(
+            (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(
                 inputs,
                 position_ids,
                 attention_mask,
