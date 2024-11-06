@@ -606,8 +606,6 @@ class FerretMetaForCausalLM(ABC):
                 - image features (if applicable)
                 - labels
         """
-        # region_flag = False
-
         # 1. 检查和初始化输入
         if region_masks is not None:
             region_flag = True
@@ -661,7 +659,8 @@ class FerretMetaForCausalLM(ABC):
 
                         if region_flag:
                             cur_region_feature_map = region_feature_maps[image_idx]  # (#patches, h*w, c)
-                            cur_region_feature_map = cur_region_feature_map.view(cur_region_feature_map.shape[0], height, width, cur_region_feature_map.shape[-1])  # (#patches, h, w, c)
+                            cur_region_feature_map = cur_region_feature_map.view(
+                                cur_region_feature_map.shape[0], height, width, cur_region_feature_map.shape[-1])  # (#patches, h, w, c)
                             base_region_feature = cur_region_feature_map[0]
                             region_feature = cur_region_feature_map[1:]
                             # pdb.set_trace()
@@ -694,7 +693,8 @@ class FerretMetaForCausalLM(ABC):
                             region_feature = region_feature.flatten(0, 1).flatten(1, 2)   # (patch_h, h, patch_w, w, c) -> (all_h, all_w, c)
                             # Tranform dtype, if using pytorch2.1+, no need to do this.
                             base_region_feature = base_region_feature.to(dtype=torch.float32)
-                            base_region_feature_resized = F.interpolate(base_region_feature.unsqueeze(0).permute(0, 3, 1, 2), (region_feature.shape[0], region_feature.shape[1]))  # (1, c, all_h, all_w)
+                            base_region_feature_resized = F.interpolate(
+                                base_region_feature.unsqueeze(0).permute(0, 3, 1, 2), (region_feature.shape[0], region_feature.shape[1]))  # (1, c, all_h, all_w)
                             base_region_feature_resized = base_region_feature_resized.to(region_feature.dtype)
                             base_region_feature_resized = base_region_feature_resized.squeeze(0).permute(1, 2, 0)   # (all_h, all_w, c)
                             # === Add:

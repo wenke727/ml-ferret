@@ -115,7 +115,7 @@ class UIData:
 
             if self.args.region_format == 'box':
                 region_coordinate_raw = [box_x1, box_y1, box_x2, box_y2]
-                if args.add_region_feature:
+                if self.args.add_region_feature:
                     i['question'] = prompt.replace('<bbox_location0>', '[{}, {}, {}, {}] {}'.format(int(box_x1_textvocab), int(box_y1_textvocab), int(box_x2_textvocab), int(box_y2_textvocab), DEFAULT_REGION_FEA_TOKEN))
                     generated_mask = generate_mask_for_feature(region_coordinate_raw, raw_w=i['image_w'], raw_h=i['image_h'], mask=None)
                     i['region_masks'] = [generated_mask]

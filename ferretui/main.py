@@ -1,5 +1,7 @@
 #%%
 import os
+
+# todo cuda visible
 import re
 import json
 import math
@@ -217,6 +219,8 @@ def get_args():
 
 if __name__ == "__main__":
     args = get_args()
+    args.add_region_feature = True
+    args.region_format = True
     # eval_model(args)
 
     # 输入格式
@@ -225,12 +229,10 @@ if __name__ == "__main__":
         "image": "appstore_reminders.png",
         "image_h": 2532,
         "image_w": 1170,
-        "conversations": [
-            {
+        "conversations": [{
             "from": "human",
             "value": "<image>\nIdentify the icon type of the widget <bbox_location0>?"
-            }
-        ],
+        }],
         "box_x1y1x2y2": [[[1035, 540, 1114, 622]]],
         # "question": "Identify the icon type of the widget [884, 213, 952, 245]?",
         "question": "widget listing",
@@ -241,5 +243,5 @@ if __name__ == "__main__":
     img = Image.open(fn).convert("RGB")
 
     model = FerretUI(args)
-    output, cur_prompt = model.generate(img, ann)
+    output, cur_prompt = model.generate(img, ann, verbose=True)
 

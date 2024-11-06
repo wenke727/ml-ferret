@@ -1,13 +1,24 @@
 #!/bin/bash
 set -xe
 
-torchrun --nnodes 1 --nproc_per_node 8 ferretui/train/train_mem.py \
+ckpt_path='./ckpt/llama8b-anyres'
+output_dir='./ckpt/llama8b-anyres_tmp'
+epochs=10
+
+data_path='./playground/sample_data/train_data_example.json'
+image_folder='./playground/images'
+
+version='ferret_llama_3'
+vision_tower='openai/clip-vit-large-patch14-336'
+
+python -m torch.distributed.run  --nnodes 1 --nproc_per_node 8 \
+    ./ferretui/train/train_mem.py \
     --deepspeed ./scripts/zero2.json \
-    --model_name_or_path /path/to/Ferret-UI/model \
-    --data_path /path/to/data \
+    --model_name_or_path $ckpt_path \
+    --data_path $data_path \
     --data_multiple 1 \
     --image_aspect_ratio anyres \
-    --image_folder /path/to/images \
+    --image_folder $image_folder \
     --is_multimodal False \
     --lazy_preprocess True \
     --resized_image_h 336 \
@@ -22,8 +33,8 @@ torchrun --nnodes 1 --nproc_per_node 8 ferretui/train/train_mem.py \
     --learning_rate 2e-5 \
     --logging_steps 1 \
     --lr_scheduler_type cosine \
-    --num_train_epochs 1 \
-    --output_dir /path/to/output_dir \
+    --num_train_epochs $epochs \
+    --output_dir $output_dir \
     --per_device_eval_batch_size 2 \
     --per_device_train_batch_size 2 \
     --report_to wandb \
@@ -41,8 +52,8 @@ torchrun --nnodes 1 --nproc_per_node 8 ferretui/train/train_mem.py \
     --mm_vision_select_feature patch \
     --mm_vision_select_layer -2 \
     --tune_mm_mlp_adapter False \
-    --version ferret_gemma_instruct \
-    --vision_tower /path/to/vision_tower \
+    --version $version \
+    --vision_tower $vision_tower \
     --add_region_feature True \
     --region_geo_sampler True \
     --sampler_pooler_mode max \
