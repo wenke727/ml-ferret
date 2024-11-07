@@ -1,36 +1,19 @@
-# Adopted from https://github.com/lm-sys/FastChat. Below is the original copyright:
-# Adopted from tatsu-lab@stanford_alpaca. Below is the original copyright:
-#    Copyright 2023 Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li
-#
-#    Licensed under the Apache License, Version 2.0 (the "License");
-#    you may not use this file except in compliance with the License.
-#    You may obtain a copy of the License at
-#
-#        http://www.apache.org/licenses/LICENSE-2.0
-#
-#    Unless required by applicable law or agreed to in writing, software
-#    distributed under the License is distributed on an "AS IS" BASIS,
-#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#    See the License for the specific language governing permissions and
-#    limitations under the License.
 import copy
 import json
 import logging
 import os
 import re
-import pathlib
 import random
 import math
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Sequence
 from pycocotools import mask as mask_util
 from functools import partial
 from copy import deepcopy
 
 import tokenizers
 import torch
-import transformers
+import torch.distributed as dist
 from packaging import version
 from PIL import Image
 from torch.utils.data import Dataset
@@ -40,210 +23,36 @@ from ferretui import conversation as conversation_lib
 from ferretui.constants import (
     DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
     DEFAULT_IMAGE_TOKEN, IGNORE_INDEX,
-    IMAGE_TOKEN_INDEX, DEFAULT_REGION_FEA_TOKEN,
-    VOCAB_IMAGE_H, VOCAB_IMAGE_W, GROUNDING_TEMPLATES
+    DEFAULT_REGION_FEA_TOKEN,
+    VOCAB_IMAGE_H, VOCAB_IMAGE_W
 )
 from ferretui.mm_utils import process_anyres_image, tokenizer_image_token
 from ferretui.model import *
-from ferretui.train.ferret_trainer import FerretTrainer
-from .misc import regulate_box, format_bytes, extract_coors, unfreeze_vit
-from .utils.peft import (
-    get_peft_state_maybe_zero_3,
-    get_peft_state_non_lora_maybe_zero_3,
-    get_mm_adapter_state_maybe_zero_3,
-    get_vision_tower_state_maybe_zero_3,
-    find_all_linear_names
-)
-
-from PIL import Image
-
-import torch.distributed as dist
-
-# local_rank = None
-local_rank = int(os.getenv('RANK', '0')) % torch.cuda.device_count()
-global_rank = int(os.getenv('RANK', '0'))
-world_size = int(os.environ["WORLD_SIZE"])
-
-def init_distributed_mode():
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
-        world_size=world_size,
-        rank=global_rank
-    )
-    print(f"dist.is_initialized(): {dist.is_initialized()}")
+from ferretui.train.arguments import DataArguments, DataCollatorForSupervisedDataset
 
 
-def rank0_print(*args):
-    if local_rank == 0:
-        print(*args)
+from ferretui import conversation as conversation_lib
+from ferretui.constants import *
+from ferretui.mm_utils import process_anyres_image, tokenizer_image_token
+
+from .misc import rank0_print, regulate_box
 
 
 IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= version.parse('0.14')
 
 
-@dataclass
-class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
-    version: Optional[str] = field(default="v0")
-    freeze_backbone: bool = field(default=False)
-    tune_mm_mlp_adapter: bool = field(default=False)
-    vision_tower: Optional[str] = field(default=None)
-    mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
-    pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
-    mm_projector_type: Optional[str] = field(default='linear')
-    mm_use_im_start_end: bool = field(default=False)
-    mm_use_im_patch_token: bool = field(default=True)
-    mm_patch_merge_type: Optional[str] = field(default='flat')
-    mm_vision_select_feature: Optional[str] = field(default="patch")
-    add_region_feature: bool = False
-    region_geo_sampler: bool = False
-    sampler_pooler_mode: str = field(default='mean')    # Support 'mean' or 'max'
-    no_coor: bool = False
-
-
-@dataclass
-class DataArguments:
-    data_path: List[str] = field(default=None, metadata={"help": "Path to the training data."})
-    data_multiple: List[float] = field(default=None, metadata={"help": "Data mutliplier for each dataset when mixed. None means direct concat."})
-    lazy_preprocess: bool = False
-    is_multimodal: bool = False
-    image_folder: List[str] = field(default=None)
-    image_aspect_ratio: str = 'square'
-    resized_image_h: int = 336  #  224
-    resized_image_w: int = 336  #  224
-    point_input_sample: str = 'segment_mask-uniform'  # 'segment_mask-uniform', 'segment_mask-center', 'segment_mask-gaussian', 'gaussian', 'center'
-    refer_previous_point: bool = False
-    use_shard_datasets: bool = field(default=False)
-
-
-@dataclass
-class TrainingArguments(transformers.TrainingArguments):
-    cache_dir: Optional[str] = field(default=None)
-    optim: str = field(default="adamw_torch")
-    remove_unused_columns: bool = field(default=False)
-    freeze_mm_mlp_adapter: bool = field(default=False)
-    unfreeze_mm_vision_tower: bool = field(default=False)
-    mpt_attn_impl: Optional[str] = field(default="triton")
-    model_max_length: int = field(
-        default=512,
-        metadata={
-            "help":
-            "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
-        },
-    )
-    double_quant: bool = field(
-        default=True,
-        metadata={
-            "help": "Compress the quantization statistics through double quantization."}
-    )
-    quant_type: str = field(
-        default="nf4",
-        metadata={
-            "help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
-    )
-    bits: int = field(
-        default=16,
-        metadata={"help": "How many bits to use."}
-    )
-    lora_enable: bool = False
-    lora_r: int = 64
-    lora_alpha: int = 16
-    lora_dropout: float = 0.05
-    lora_weight_path: str = ""
-    lora_bias: str = "none"
-    lora_qv_proj_only: bool = False
-    mm_projector_lr: Optional[float] = None
-    mm_vision_tower_lr: Optional[float] = None
-    group_by_modality_length: bool = field(default=False)
-    use_safetensors: Optional[bool] = None
-
-
-def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
-    """Collects the state dict and dump to disk."""
-
-    if getattr(trainer.args, "tune_mm_mlp_adapter", False):
-        # Only save Adapter
-        keys_to_match = ['mm_projector']
-        if getattr(trainer.args, "use_im_start_end", False):
-            keys_to_match.extend(['embed_tokens', 'embed_in'])
-
-        weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
-        trainer.model.config.save_pretrained(output_dir)
-
-        current_folder = output_dir.split('/')[-1]
-        parent_folder = os.path.dirname(output_dir)
-        if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
-            if current_folder.startswith('checkpoint-'):
-                mm_projector_folder = os.path.join(parent_folder, "mm_projector")
-                os.makedirs(mm_projector_folder, exist_ok=True)
-                torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
-            else:
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
-        return
-
-    if trainer.deepspeed:
-        torch.cuda.synchronize()
-        trainer.save_model(output_dir)
-        return
-
-    state_dict = trainer.model.state_dict()
-    if trainer.args.should_save:
-        cpu_state_dict = {
-            key: value.cpu()
-            for key, value in state_dict.items()
-        }
-        del state_dict
-        trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
-
-
-def smart_tokenizer_and_embedding_resize(
-    special_tokens_dict: Dict,
-    tokenizer: PreTrainedTokenizer,
-    model: transformers.PreTrainedModel,
-):
-    """Resize tokenizer and embedding.
-
-    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
-    """
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
-    model.resize_token_embeddings(len(tokenizer))
-
-    if num_new_tokens > 0:
-        input_embeddings = model.get_input_embeddings().weight.data
-        output_embeddings = model.get_output_embeddings().weight.data
-
-        input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-        output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
-
-        input_embeddings[-num_new_tokens:] = input_embeddings_avg
-        output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
-
 def _tokenize_fn(strings: Sequence[str], tokenizer: PreTrainedTokenizer) -> Dict:
     """Tokenize a list of strings."""
     tokenized_list = [
-        tokenizer(
-            text,
-            return_tensors="pt",
-            padding="longest",
-            max_length=tokenizer.model_max_length,
-            truncation=True,
-        ) for text in strings
+        tokenizer(text, return_tensors="pt", padding="longest", max_length=tokenizer.model_max_length, truncation=True)
+            for text in strings
     ]
-    input_ids = labels = [
-        tokenized.input_ids[0] for tokenized in tokenized_list
-    ]
+    input_ids = labels = [tokenized.input_ids[0] for tokenized in tokenized_list]
     input_ids_lens = labels_lens = [
         tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item()
-        for tokenized in tokenized_list
+           for tokenized in tokenized_list
     ]
-    return dict(
-        input_ids=input_ids,
-        labels=labels,
-        input_ids_lens=input_ids_lens,
-        labels_lens=labels_lens,
-    )
+    return dict(input_ids=input_ids, labels=labels, input_ids_lens=input_ids_lens, labels_lens=labels_lens)
 
 
 def _mask_targets(target, tokenized_lens, speakers):
@@ -254,6 +63,7 @@ def _mask_targets(target, tokenized_lens, speakers):
     for tokenized_len, speaker in zip(tokenized_lens, speakers):
         if speaker == "human":
             target[cur_idx+2:cur_idx + tokenized_len] = IGNORE_INDEX
+
         cur_idx += tokenized_len
 
 
@@ -262,19 +72,24 @@ def _add_speaker_and_signal(header, source, get_conversation=True):
     BEGIN_SIGNAL = "### "
     END_SIGNAL = "\n"
     conversation = header
+
     for sentence in source:
         from_str = sentence["from"]
+
         if from_str.lower() == "human":
             from_str = conversation_lib.default_conversation.roles[0]
         elif from_str.lower() == "gpt":
             from_str = conversation_lib.default_conversation.roles[1]
         else:
             from_str = 'unknown'
-        sentence["value"] = (BEGIN_SIGNAL + from_str + ": " +
-                             sentence["value"] + END_SIGNAL)
+
+        sentence["value"] = (BEGIN_SIGNAL + from_str + ": " + sentence["value"] + END_SIGNAL)
+
         if get_conversation:
             conversation += sentence["value"]
+
     conversation += BEGIN_SIGNAL
+
     return conversation
 
 
@@ -412,8 +227,8 @@ def preprocess_llama3(sources, tokenizer: PreTrainedTokenizer, has_image: bool =
     # 3. Tokenize conversations
     if has_image:
         input_ids = torch.stack(
-            [tokenizer_image_token(prompt, tokenizer, return_tensors='pt') 
-                for prompt in conversations], 
+            [tokenizer_image_token(prompt, tokenizer, return_tensors='pt')
+                for prompt in conversations],
             dim=0
         )
     else:
@@ -848,25 +663,39 @@ def preprocess(sources: Sequence[str], tokenizer: PreTrainedTokenizer, has_image
     2. Concatenate conversations together;
     3. Tokenize the concatenated conversation;
     4. Make a deepcopy as the target. Mask human words with IGNORE_INDEX.
+
+    对输入的对话数据进行预处理转换:
+    1. 在每句话开头添加 '### ' 信号,结尾添加换行符 '\n';
+    2. 将对话内容连接在一起;
+    3. 对连接后的对话内容进行分词处理;
+    4. 深度复制作为目标输出,将人类话语部分用 IGNORE_INDEX 进行遮蔽。
+
+    Args:
+        sources (Sequence[str]): 源对话数据列表
+        tokenizer (PreTrainedTokenizer): 分词器
+        has_image (bool, optional): 是否包含图像. Defaults to False.
+
+    Returns:
+        Dict: 包含处理后的 input_ids 和 labels 的字典
     """
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.PLAIN:
         return preprocess_plain(sources, tokenizer)
-    
+
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.LLAMA_2:
         return preprocess_llama_2(sources, tokenizer, has_image=has_image)
-    
+
     if conversation_lib.default_conversation.version.startswith("v1"):
         return preprocess_v1(sources, tokenizer, has_image=has_image)
-    
+
     if conversation_lib.default_conversation.version == "mpt":
         return preprocess_mpt(sources, tokenizer, has_image=has_image)
-    
+
     if conversation_lib.default_conversation.version == "llama3":
         return preprocess_llama3(sources, tokenizer, has_image=has_image)
-    
+
     if conversation_lib.default_conversation.version.startswith("gemma"):
         return preprocess_gemma(sources, tokenizer, has_image=has_image)
-    
+
     if conversation_lib.default_conversation.version == "phi3":
         return preprocess_phi3(sources, tokenizer, has_image=has_image)
 
@@ -1069,6 +898,7 @@ class LazySupervisedDataset(Dataset):
             data_i["dataset"] = "sharegpt"
         return datas
 
+    # TODO 研究數據格式
     def load_screen2words(self, data_path, image_folder):
         datas = json.load(open(data_path, "r"))
         ori_counts = len(datas)
@@ -1219,11 +1049,7 @@ class LazySupervisedDataset(Dataset):
             data_i["image"] = os.path.join(image_folder, data_i['image'])
         return datas
 
-    def __init__(self, data_path: str,
-                 tokenizer: PreTrainedTokenizer,
-                 data_args: DataArguments,
-                 model_args: DataArguments,
-                 ):
+    def __init__(self, data_path: str, tokenizer: PreTrainedTokenizer, data_args: DataArguments, model_args: DataArguments):
         super(LazySupervisedDataset, self).__init__()
         data_multiple = data_args.data_multiple
         if not isinstance(data_path, list):
@@ -1311,6 +1137,8 @@ class LazySupervisedDataset(Dataset):
             elif 'sharegpt' in data_path_i or 'wizardlm' in data_path_i:
                 rank0_print(f"Loading ShareGPT/WizardLM text only data")
                 list_data_dict.append(self.load_sharegpt(data_path_i))
+
+            # Ferret UI tasks
             elif 'screen2words' in data_path_i:
                 logging.warning(f"Loading screen2words data")
                 list_data_dict.append(self.load_screen2words(data_path_i, image_folder_i))
@@ -1541,7 +1369,7 @@ class LazySupervisedDataset(Dataset):
             return re.subn(r"(#U[0-9a-f]{4})", lambda cp: chr(int(cp.groups()[0][2:], 16)), filename)[0]
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        sources = deepcopy(self.list_data_dict[i])
+        sources = copy.deepcopy(self.list_data_dict[i])
         cache_region_masks = []
         if isinstance(i, int):
             sources = [sources]
@@ -1665,7 +1493,7 @@ class LazySupervisedDataset(Dataset):
                             else:
                                 if 'segment_mask' in self.point_input_sample:
                                     if 'masks' in sources[0]:
-                                        cur_mask = deepcopy(sources[0]['masks'][box_list_idx][box_idx])
+                                        cur_mask = copy.deepcopy(sources[0]['masks'][box_list_idx][box_idx])
                                         assert cur_mask['size'][0] == sources[0]['image_h']
                                         assert cur_mask['size'][1] == sources[0]['image_w']
                                         if 'uniform' in self.point_input_sample.split('-')[1]:
@@ -1695,7 +1523,7 @@ class LazySupervisedDataset(Dataset):
                             else:
                                 cur_conv = cur_conv.replace(f'<bbox_location{box_idx}>', coor_i + f' {DEFAULT_REGION_FEA_TOKEN}')
                             cur_box = box_i
-                            cur_mask = deepcopy(sources[0]['masks'][box_list_idx][box_idx]) if 'masks' in sources[0] else None
+                            cur_mask = copy.deepcopy(sources[0]['masks'][box_list_idx][box_idx]) if 'masks' in sources[0] else None
                             ori_size_raw_coor_i = [
                                 raw_coor_i[0]/ratio_w,
                                 raw_coor_i[1]/ratio_h,
@@ -1744,58 +1572,14 @@ class LazySupervisedDataset(Dataset):
             crop_size = self.data_args.image_processor.crop_size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
             data_dict['image_size'] = (crop_size['height'], crop_size['width'])
-        
+
         if self.add_region_feature:
             data_dict['region_masks'] = cache_region_masks
-        
+
         return data_dict
 
 
-@dataclass
-class DataCollatorForSupervisedDataset(object):
-    """Collate examples for supervised fine-tuning."""
-
-    tokenizer: PreTrainedTokenizer
-
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances]
-                                  for key in ("input_ids", "labels"))
-        input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id
-        )
-
-        labels = torch.nn.utils.rnn.pad_sequence(
-            labels,
-            batch_first=True,
-            padding_value=IGNORE_INDEX
-        )
-
-        input_ids = input_ids[:, :self.tokenizer.model_max_length]
-        labels = labels[:, :self.tokenizer.model_max_length]
-        batch = dict(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-        )
-
-        if 'image' in instances[0]:
-            images = [instance['image'] for instance in instances]
-            image_sizes = [instance['image_size'] for instance in instances]
-            if all(x is not None and x.shape == images[0].shape for x in images):
-                batch['images'] = torch.stack(images)
-            else:
-                batch['images'] = images
-            batch['image_sizes'] = image_sizes
-
-        if 'region_masks' in instances[0]:
-            region_masks = [instance['region_masks'] for instance in instances]
-            batch['region_masks'] = region_masks
-
-        return batch
-
-
+""" 数据模块创建函数 """
 def make_supervised_data_module(tokenizer: PreTrainedTokenizer, data_args, model_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
     train_dataset = LazySupervisedDataset(
@@ -1811,3 +1595,4 @@ def make_supervised_data_module(tokenizer: PreTrainedTokenizer, data_args, model
         eval_dataset=None,
         data_collator=data_collator
     )
+

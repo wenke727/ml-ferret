@@ -5,7 +5,7 @@ ckpt_path='./ckpt/llama8b-anyres'
 output_dir='./ckpt/llama8b-anyres_tmp'
 epochs=10
 
-data_path='./playground/sample_data/train_data_example.json'
+data_path='./playground/sample_data/train_data_conversation_interaction.json'
 image_folder='./playground/images'
 
 version='ferret_llama_3'

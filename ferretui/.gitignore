@@ -1,5 +1,6 @@
 ckpt
 wandb
+eval_output
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
