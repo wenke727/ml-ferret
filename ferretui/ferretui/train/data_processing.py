@@ -754,18 +754,24 @@ class LazySupervisedDataset(Dataset):
 
     def shard_data(self, datas, data_path, ori_counts):
         no_shard_per_worker = int(math.ceil(len(datas) / self.world_size))
-        datas = datas[no_shard_per_worker*self.global_rank: no_shard_per_worker*(self.global_rank+1)]
+        datas = datas[
+            no_shard_per_worker * self.global_rank:
+                no_shard_per_worker * (self.global_rank + 1)
+        ]
         print(f"Shard {data_path}: ori: {ori_counts}, now: {len(datas)}")
         return datas
 
     def load_pretrain(self, data_path, image_folder):
         datas = json.load(open(data_path, "r"))
         ori_counts = len(datas)
+
         if self.data_args.use_shard_datasets:
             datas = self.shard_data(datas, data_path, ori_counts)
+
         for data_i in datas:
             data_i["dataset"] = "pretrain"
             data_i["image"] = os.path.join(image_folder, data_i['image'])
+
         return datas
 
     def load_llava_mixed(self, data_path, image_folder):
@@ -1051,7 +1057,7 @@ class LazySupervisedDataset(Dataset):
 
     def __init__(self, data_path: str, tokenizer: PreTrainedTokenizer, data_args: DataArguments, model_args: DataArguments):
         super(LazySupervisedDataset, self).__init__()
-        data_multiple = data_args.data_multiple
+        data_multiple = data_args.data_multiple # default: None
         if not isinstance(data_path, list):
             data_path = [data_path]
 
@@ -1195,6 +1201,7 @@ class LazySupervisedDataset(Dataset):
                 rank0_print(f"Multiplying {dataset_name_i} by {data_scaler_i} times")
                 new_dataset_i = extend_list(dataset_i, data_scaler_i)
                 new_list_data_dict.extend(new_dataset_i)
+
             list_data_dict = new_list_data_dict
             random.shuffle(list_data_dict)
 
@@ -1203,11 +1210,12 @@ class LazySupervisedDataset(Dataset):
         rank0_print("Formatting inputs...Skip in lazy mode")
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
+
         self.model_args = model_args
-        self.point_input_sample = self.data_args.point_input_sample
-        self.add_region_feature = self.model_args.add_region_feature
-        self.no_coor = self.model_args.no_coor
-        self.refer_previous_point = self.data_args.refer_previous_point
+        self.point_input_sample = self.data_args.point_input_sample # default: 'segment_mask-uniform'
+        self.add_region_feature = self.model_args.add_region_feature # default: False
+        self.no_coor = self.model_args.no_coor # default: False
+        self.refer_previous_point = self.data_args.refer_previous_point # default: False
 
         if self.data_args.use_shard_datasets:
             self.sync_iter_counts()
@@ -1369,13 +1377,16 @@ class LazySupervisedDataset(Dataset):
             return re.subn(r"(#U[0-9a-f]{4})", lambda cp: chr(int(cp.groups()[0][2:], 16)), filename)[0]
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        # Step 1: 获取并复制样本数据
         sources = copy.deepcopy(self.list_data_dict[i])
         cache_region_masks = []
         if isinstance(i, int):
             sources = [sources]
-        assert len(
-            sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+        assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+
+        # Step 2: 处理图像数据
         if 'image' in sources[0]:
+            # Step 2.1: 检查样本是否包含图像
             image_file = self.list_data_dict[i]['image']
             # image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
@@ -1387,8 +1398,10 @@ class LazySupervisedDataset(Dataset):
                     if os.path.isfile(filename_ + ext_):
                         image_file = filename_ + ext_
                         break
+            # Step 2.2: 载入图像并按需求预处理
             image = Image.open(image_file).convert('RGB')
             image_size = image.size
+
             if self.data_args.image_aspect_ratio == 'pad':
                 def expand2square(pil_img, background_color):
                     width, height = pil_img.size
@@ -1408,7 +1421,6 @@ class LazySupervisedDataset(Dataset):
                 image = expand2square(image, tuple(int(x * 255)
                                       for x in processor.image_mean))
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0] #(640, 480)
-
             elif self.data_args.image_aspect_ratio == 'square_nocrop':
                 resized_image_h = self.data_args.resized_image_h
                 resized_image_w = self.data_args.resized_image_w
@@ -1431,8 +1443,12 @@ class LazySupervisedDataset(Dataset):
                     do_center_crop=False,
                     size=[resized_image_h, resized_image_w]
                 )
-                image = process_anyres_image(image, processor, self.data_args.image_grid_pinpoints, \
-                                             image_process_func=image_process_func) # torch.Size([5, 3, 336, 336])
+                image = process_anyres_image(
+                    image,
+                    processor,
+                    self.data_args.image_grid_pinpoints,
+                    image_process_func=image_process_func
+                ) # torch.Size([5, 3, 336, 336])
                 # image_size = image.size
                 # image = process_anyres_image(       # torch.Size([5, 3, 336, 336])
                 #     image, processor, self.data_args.image_grid_pinpoints)
@@ -1440,12 +1456,14 @@ class LazySupervisedDataset(Dataset):
                 image_size = image.size
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
 
-            # Process Locations/Coordinations.
+            # Step 3: 位置信息（坐标）处理
             if 'location_instruction' in sources[0]:
-                assert sources[0]['dataset'] in ['git_instruction', 'vg_element', 'llava_grounded',\
-                                                 'refexp', 'flickr_entities', 'objects365', 'widgetcaptions', 'taperception', \
-                                                 'widget_listing', 'ocr', 'find_text', 'icon_recognition', 'find_icons', \
-                                                 'widget_classification',  'find_widget', 'conversation_interaction']
+                assert sources[0]['dataset'] in [
+                    'git_instruction', 'vg_element', 'llava_grounded',
+                    'refexp', 'flickr_entities', 'objects365', 'widgetcaptions', 'taperception', \
+                    'widget_listing', 'ocr', 'find_text', 'icon_recognition', 'find_icons', \
+                    'widget_classification',  'find_widget', 'conversation_interaction'
+                ]
                 ratio_w = VOCAB_IMAGE_W * 1.0 / sources[0]['image_w']
                 ratio_h = VOCAB_IMAGE_H * 1.0 / sources[0]['image_h']
                 conversation = deepcopy(sources[0]['conversations'])
@@ -1456,6 +1474,7 @@ class LazySupervisedDataset(Dataset):
                     # conversation[0]['value'] = conversation[0]['value'] + random.choice(GROUNDING_TEMPLATES)
                     conversation[0]['value'] = conversation[0]['value'] + '\nProvide the bounding boxes of the mentioned objects.'
 
+                # Step 3.1: 处理位置信息： - 若样本需要描述图像中的对象位置，则需要处理位置信息
                 for box_list_idx, box_list_i in enumerate(sources[0]['box_x1y1x2y2']):
                     # For human input, always build a cache to save sampled point in this round of human input.
                     if box_list_idx % 2 == 0 and self.refer_previous_point:
@@ -1466,6 +1485,7 @@ class LazySupervisedDataset(Dataset):
                         # No location mentioned in this round of conversation.
                         continue
 
+                    # Step 3.2: 转换为模型所需格式 (如point或box)
                     if box_list_idx % 2 == 0:
                         # Randomly choose point or box as coordination format in human round.
                         location_format = random.choice(['point', 'box'])
@@ -1473,29 +1493,39 @@ class LazySupervisedDataset(Dataset):
                         # Always output box in model reponse.
                         location_format = 'box'
                     cur_conv = conversation[box_list_idx]['value']
+
+                    # Step 3.3: 迭代替换当前对话中的 <bbox_location> 为实际的 box/point 坐标
                     # Iteratively replace <bbox_location> in current conv with real box/point coordinate.
                     for box_idx, box_i in enumerate(box_list_i):
+                        # 规范化边界框坐标，确保在图像范围内
                         box_i = regulate_box(box_i, sources[0]['image_w'], sources[0]['image_h'])
+
+                        # Step 3.3.1: 处理边界框(box)格式的坐标
                         if location_format == 'box':
-                            # If this box is mentioned in last human input, use the same coordinates as human mentioned.
+                            # 检查是否在上一轮人类输入中提到过该框，如果是则使用相同的坐标
                             if 'point_box_cache' in locals() and tuple(box_i) in point_box_cache:
                                 raw_coor_i = point_box_cache[tuple(box_i)]
                                 coor_i = f'[{int(raw_coor_i[0])}, {int(raw_coor_i[1])}]'
                             else:
+                                # 获取新的边界框坐标
                                 raw_coor_i = self.get_bbox_coor(box=box_i, ratio_w=ratio_w, ratio_h=ratio_h)
                                 coor_i = f'[{int(raw_coor_i[0])}, {int(raw_coor_i[1])}, {int(raw_coor_i[2])}, {int(raw_coor_i[3])}]'
+
+                        # Step 3.3.2: 处理点(point)格式的坐标
                         elif location_format == 'point':
-                            # Assert it's human input.
+                            # 确保这是人类输入回合
                             assert box_list_idx % 2 == 0
-                            # If this box is mentioned previously in this round of human input, use the same coordinates as previously mentioned.
+                            # 检查是否在当前对话轮次中已经提到过该框
                             if 'point_box_cache' in locals() and tuple(box_i) in point_box_cache:
                                 raw_coor_i = point_box_cache[tuple(box_i)]
                             else:
-                                if 'segment_mask' in self.point_input_sample:
+                                # Step 3.3.2.1: 基于分割掩码的点采样
+                                if self.point_input_sample.startswith('segment_mask'): # point_input_sample default: 'segment_mask-uniform'
                                     if 'masks' in sources[0]:
                                         cur_mask = copy.deepcopy(sources[0]['masks'][box_list_idx][box_idx])
                                         assert cur_mask['size'][0] == sources[0]['image_h']
                                         assert cur_mask['size'][1] == sources[0]['image_w']
+                                        # 根据不同的采样策略选择点
                                         if 'uniform' in self.point_input_sample.split('-')[1]:
                                             obj_center_x, obj_center_y = self.sample_point_in_segment(mask=cur_mask, ratio_w=ratio_w, ratio_h=ratio_h)
                                         elif 'center' in self.point_input_sample.split('-')[1]:
@@ -1503,8 +1533,10 @@ class LazySupervisedDataset(Dataset):
                                         elif 'gaussian' in self.point_input_sample.split('-')[1]:
                                             obj_center_x, obj_center_y = self.sample_point_in_segment(mask=cur_mask, ratio_w=ratio_w, ratio_h=ratio_h, box=box_i, sampling='gaussian')
                                     else:
-                                        # Not all data have/need segment masks.
+                                        # 对于没有分割掩码的数据，使用高斯采样
                                         obj_center_x, obj_center_y = self.get_obj_center(box=box_i, ratio_w=ratio_w, ratio_h=ratio_h, std_dev_weight=0.15)
+
+                                # Step 3.3.2.2: 其他点采样策略
                                 elif self.point_input_sample == 'gaussian':
                                     obj_center_x, obj_center_y = self.get_obj_center(box=box_i, ratio_w=ratio_w, ratio_h=ratio_h, std_dev_weight=0.15)
                                 elif self.point_input_sample == 'center':
@@ -1512,57 +1544,60 @@ class LazySupervisedDataset(Dataset):
                                     obj_center_y = ratio_h * (box_i[1]+box_i[3])/2.0
                                 else:
                                     raise NotImplementedError(f'Not support {self.point_input_sample} in data sampling')
+
+                                # 保存采样的点坐标
                                 raw_coor_i = [obj_center_x, obj_center_y]
                                 if 'point_box_cache' in locals() and self.refer_previous_point:
                                     point_box_cache[tuple(box_i)] = raw_coor_i
                             coor_i = f'[{int(raw_coor_i[0])}, {int(raw_coor_i[1])}]'
+
+                        # 确保占位符存在于当前对话中
                         assert f'<bbox_location{box_idx}>' in cur_conv, f"String '<bbox_location{box_idx}>' not found in {cur_conv}"
+
+                        # Step 3.3.3: 处理区域特征
                         if self.add_region_feature and box_list_idx % 2 == 0:
+                            # 添加区域特征标记
                             if self.no_coor:
                                 cur_conv = cur_conv.replace(f'<bbox_location{box_idx}>', f'{DEFAULT_REGION_FEA_TOKEN}')
                             else:
                                 cur_conv = cur_conv.replace(f'<bbox_location{box_idx}>', coor_i + f' {DEFAULT_REGION_FEA_TOKEN}')
+
+                            # 准备生成区域掩码
                             cur_box = box_i
                             cur_mask = copy.deepcopy(sources[0]['masks'][box_list_idx][box_idx]) if 'masks' in sources[0] else None
-                            ori_size_raw_coor_i = [
-                                raw_coor_i[0]/ratio_w,
-                                raw_coor_i[1]/ratio_h,
-                                raw_coor_i[2]/ratio_w,
-                                raw_coor_i[3]/ratio_h
-                            ] if len(raw_coor_i) == 4 \
-                                else [raw_coor_i[0]/ratio_w, raw_coor_i[1]/ratio_h]
+                            # 将坐标转换回原始图像大小
+                            ori_size_raw_coor_i = [raw_coor_i[0] / ratio_w, raw_coor_i[1] / ratio_h, raw_coor_i[2] / ratio_w, raw_coor_i[3] / ratio_h] \
+                                if len(raw_coor_i) == 4 else [raw_coor_i[0] / ratio_w, raw_coor_i[1] / ratio_h]
 
-                            cur_region_mask = self.generate_mask_for_feature(
-                                ori_size_raw_coor_i, cur_box, cur_mask, raw_w=sources[0]['image_w'], raw_h=sources[0]['image_h'])
+                            # 生成区域特征掩码
+                            cur_region_mask = self.generate_mask_for_feature(ori_size_raw_coor_i, cur_box, cur_mask, raw_w=sources[0]['image_w'], raw_h=sources[0]['image_h'])
                             cache_region_masks.append(cur_region_mask)
-                            # print('cur_conv:', cur_conv)
-                            # print('cur_region_mask:', cur_region_mask.nonzero())
-                            # raise NotImplementedError()
-                            # pdb.set_trace()
+
+                        # Step 3.3.4: 替换对话中的位置标记
                         else:
                             if self.no_coor:
                                 cur_conv = cur_conv.replace(f'<bbox_location{box_idx}>', '')
                             else:
                                 cur_conv = cur_conv.replace(f'<bbox_location{box_idx}>', coor_i)
+
                     # Assign this round of conv back.
                     conversation[box_list_idx]['value'] = cur_conv
                 sources[0]['conversations'] = conversation
                 # print(conversation)
                 # exit(0)
 
+            # Step 4: 多模态数据处理
             sources = preprocess_multimodal(copy.deepcopy([e["conversations"] for e in sources]), self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
 
-        data_dict = preprocess(
-            sources,
-            self.tokenizer,
-            has_image=('image' in self.list_data_dict[i])
-        )
+        # Step 5: 文本处理：调用 preprocess 函数
+        data_dict = preprocess(sources, self.tokenizer, has_image=('image' in self.list_data_dict[i]))
 
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0], labels=data_dict["labels"][0])
 
+        # Step 6: 添加额外信息 (图像或遮罩)
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
             data_dict['image'] = image

@@ -71,8 +71,10 @@ class TrainingArguments(transformers.TrainingArguments):
 
 @dataclass
 class DataArguments:
-    data_path: List[str] = field(default=None, metadata={"help": "Path to the training data."})
-    data_multiple: List[float] = field(default=None, metadata={"help": "Data mutliplier for each dataset when mixed. None means direct concat."})
+    data_path: List[str] = field(
+        default=None, metadata={"help": "Path to the training data."})
+    data_multiple: List[float] = field(
+        default=None, metadata={"help": "Data mutliplier for each dataset when mixed. None means direct concat."})
     lazy_preprocess: bool = False
     is_multimodal: bool = False
     image_folder: List[str] = field(default=None)

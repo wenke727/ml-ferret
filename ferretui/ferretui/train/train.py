@@ -183,7 +183,7 @@ def train(attn_implementation=None):
                 **bnb_model_from_pretrained_args
             )
         elif "phi3" in model_args.model_name_or_path:
-            model = LlavaPhiForCausalLM.from_pretrained(
+            model = LlavaPhiForCausalLM.from_pretrained( # type: ignore
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
                 attn_implementation=attn_implementation,
@@ -215,7 +215,7 @@ def train(attn_implementation=None):
         model.model.requires_grad_(False)
 
     if training_args.bits in [4, 8]:
-        from peft import prepare_model_for_kbit_training
+        from peft import prepare_model_for_kbit_training # type: ignore
         model.config.torch_dtype = (torch.float32 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
 
@@ -231,7 +231,7 @@ def train(attn_implementation=None):
 
     # 5.2. LoRA 微调设置
     if training_args.lora_enable:
-        from peft import LoraConfig, get_peft_model
+        from peft import LoraConfig, get_peft_model # type: ignore
         lora_config = LoraConfig(
             r=training_args.lora_r,
             lora_alpha=training_args.lora_alpha,
@@ -362,7 +362,7 @@ def train(attn_implementation=None):
         model.config.pad_token_id = tokenizer.pad_token_id
 
     if training_args.bits in [4, 8]:
-        from peft.tuners.lora import LoraLayer
+        from peft.tuners.lora import LoraLayer # type: ignore
         for name, module in model.named_modules():
             if isinstance(module, LoraLayer):
                 if training_args.bf16:
